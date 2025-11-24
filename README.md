@@ -14,6 +14,8 @@ You need to set your OpenAI API key in the authinfo file. The format of the file
 machine api.openai.com login apikey password <key>
 ```
 
+You can find the authinfo file in your home directory under `~/.authinfo`. If the file does not exist, you can create it.
+
 You need to create a `prompts.json` file in the `ai-proofread/prompts.json` under evolution user config directory. On linux it is `/.config/evolution/ai-proofread/prompts.json`.
 
 The `prompts.json` file should contain an array of prompts. Each prompt should have an id (show in menu and on toolbar combo box) and a text. The text is the prompt text sent to the ChatGPT.

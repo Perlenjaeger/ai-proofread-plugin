@@ -12,6 +12,12 @@
 #include "m-msg-composer-extension.h"
 #include "m-chatgpt-api.h"
 
+/* Forward declarations for E/GTK UI helpers not included by other headers here */
+typedef struct _EUIManager EUIManager;
+EUIManager *e_html_editor_get_ui_manager (EHTMLEditor *editor);
+GtkActionGroup *e_html_editor_get_action_group (EHTMLEditor *editor, const gchar *name);
+void e_action_group_add_actions_localized (GtkActionGroup *action_group, const gchar *domain, const GtkActionEntry *entries, gint n_entries, gpointer user_data);
+
 
 struct _MMsgComposerExtensionPrivate {
 	JsonArray *prompts;  // Array of prompts loaded from config
@@ -288,7 +294,7 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
     GString *ui_def;
     EHTMLEditor *html_editor;
     GtkActionGroup *action_group;
-    GtkUIManager *ui_manager;
+    EUIManager *ui_manager;
     GError *error = NULL;
     guint i, n_prompts;
 
@@ -362,7 +368,7 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
     e_action_group_add_actions_localized(action_group, GETTEXT_PACKAGE,
         &menu_entry, 1, msg_composer_ext);
 
-    gtk_ui_manager_add_ui_from_string(ui_manager, ui_def->str, -1, &error);
+    gtk_ui_manager_add_ui_from_string((GtkUIManager*)ui_manager, ui_def->str, -1, &error);
 
     if (error) {
         g_warning("%s: Failed to add ui definition: %s", G_STRFUNC, error->message);
@@ -395,14 +401,14 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
     gtk_container_add(GTK_CONTAINER(tool_item), GTK_WIDGET(frame));
     gtk_widget_show_all(GTK_WIDGET(tool_item));
     
-    GtkToolbar *toolbar = GTK_TOOLBAR(gtk_ui_manager_get_widget(ui_manager, "/main-toolbar"));
+    GtkToolbar *toolbar = GTK_TOOLBAR(gtk_ui_manager_get_widget((GtkUIManager*)ui_manager, "/main-toolbar"));
     gtk_toolbar_insert(toolbar, tool_item, -1);
 
     // Connect signals
     g_signal_connect(run_button, "clicked",
                     G_CALLBACK(run_button_clicked_cb), msg_composer_ext);
 
-    gtk_ui_manager_ensure_update(ui_manager);
+    gtk_ui_manager_ensure_update((GtkUIManager*)ui_manager);
     g_string_free(ui_def, TRUE);
 }
 

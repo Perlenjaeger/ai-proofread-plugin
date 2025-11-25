@@ -12,6 +12,23 @@
 #include "m-msg-composer-extension.h"
 #include "m-chatgpt-api.h"
 
+/*
+ * ai-proofread-plugin - Message composer extension
+ *
+ * This file implements the UI integration for invoking an external
+ * proofreading assistant (ChatGPT) from the message composer. The code
+ * loads prompts from a JSON config and an API key from the user's
+ * ~/.authinfo, then adds actions and a toolbar button to the composer
+ * UI so the user can invoke proofreading on the current editor content.
+ *
+ * The major responsibilities here are:
+ * - load prompts and API key during initialization
+ * - create EUI actions and toolbar/menu items for each prompt
+ * - fetch editor content asynchronously and call the proofreading API
+ * - insert the returned proofread text into the editor
+ *
+ */
+
 /* Forward declarations for E/GTK UI helpers not included by other headers here */
 typedef struct _EUIManager EUIManager;
 EUIManager *e_html_editor_get_ui_manager(EHTMLEditor *editor);
@@ -34,6 +51,15 @@ struct ProofreadContext
 G_DEFINE_DYNAMIC_TYPE_EXTENDED(MMsgComposerExtension, m_msg_composer_extension, E_TYPE_EXTENSION, 0,
                                G_ADD_PRIVATE_DYNAMIC(MMsgComposerExtension))
 
+/*
+ * load_prompts:
+ * Read the prompts configuration file from the user's config directory
+ * (``$XDG_CONFIG_HOME/ai-proofread/prompts.json`` or equivalent) and
+ * return a referenced `JsonArray` containing the prompt objects.
+ *
+ * On error or when the root is not an array an empty `JsonArray` is
+ * returned. The caller owns a reference to the returned array.
+ */
 static JsonArray *
 load_prompts(void)
 {
@@ -53,21 +79,36 @@ load_prompts(void)
         if (JSON_NODE_HOLDS_ARRAY(root))
         {
             prompts = json_array_ref(json_node_get_array(root));
+            g_debug("Prompts loaded: %d", json_array_get_length(prompts));
         }
-        g_debug("Prompts loaded: %d", json_array_get_length(prompts));
+        else
+        {
+            /* If root exists but is not an array, treat as empty prompts */
+            g_warning("Prompts file root is not an array, using empty prompts list");
+            prompts = json_array_new();
+        }
     }
     else
     {
         g_warning("Error loading prompts: %s", error->message);
         g_error_free(error);
+        prompts = json_array_new();
     }
 
     g_object_unref(parser);
     g_free(config_path);
 
-    return prompts ? prompts : json_array_new();
+    return prompts;
 }
 
+/*
+ * load_api_key:
+ * Read `~/.authinfo` and try to find a line matching the expected
+ * format for the OpenAI API key: ``machine api.openai.com login apikey password <key>``.
+ *
+ * Returns a newly allocated string with the API key or NULL if none is
+ * found. The caller must free the returned string.
+ */
 static gchar *
 load_api_key(void)
 {
@@ -120,6 +161,13 @@ load_api_key(void)
     return api_key;
 }
 
+/*
+ * msg_text_cb:
+ * Asynchronous callback invoked when the editor content has been
+ * retrieved. This function calls the proofreading API with the content
+ * and prompt id, inserts the returned text into the editor and performs
+ * proper cleanup of temporary resources.
+ */
 static void
 msg_text_cb(GObject *source_object,
             GAsyncResult *result,
@@ -176,7 +224,11 @@ msg_text_cb(GObject *source_object,
                 error->message,
                 NULL);
 
+            /* Free resources before returning on error */
             g_error_free(error);
+            g_free(content);
+            e_content_editor_util_free_content_hash(content_hash);
+            g_free(context->prompt_id);
             g_free(context);
             return;
         }
@@ -201,6 +253,10 @@ msg_text_cb(GObject *source_object,
             gtk_dialog_run(GTK_DIALOG(dialog));
             gtk_widget_destroy(dialog);
 
+            /* Free resources on no-response path */
+            g_free(content);
+            e_content_editor_util_free_content_hash(content_hash);
+            g_free(context->prompt_id);
             g_free(context);
             return;
         }
@@ -214,6 +270,7 @@ msg_text_cb(GObject *source_object,
         g_free(content);
     }
 
+    /* Always free the content hash and context allocated by the caller */
     e_content_editor_util_free_content_hash(content_hash);
     g_free(context->prompt_id);
     g_free(context);
@@ -221,6 +278,13 @@ msg_text_cb(GObject *source_object,
 
 /* removed GtkAction-based prompt callback — using EUI-based callbacks instead */
 
+/*
+ * action_msg_composer_eui_cb:
+ * EUI action callback invoked when a prompt action defined via EUI
+ * is triggered. The action's name is used as the prompt identifier — the
+ * editor content is requested and processed asynchronously by
+ * `msg_text_cb`.
+ */
 static void
 action_msg_composer_eui_cb(EUIAction *action,
                            GVariant *parameter,
@@ -258,6 +322,13 @@ action_msg_composer_eui_cb(EUIAction *action,
     g_free(action_name);
 }
 
+/*
+ * menu_item_activate_cb:
+ * GTK menu item activate handler used by the runtime popup menu.
+ * `user_data` is expected to be a duplicated string containing the
+ * prompt id; this function copies it into a `ProofreadContext` and
+ * triggers content retrieval. The duplicate is freed here.
+ */
 static void
 menu_item_activate_cb(GtkMenuItem *item, gpointer user_data)
 {
@@ -290,8 +361,19 @@ menu_item_activate_cb(GtkMenuItem *item, gpointer user_data)
         NULL,
         msg_text_cb,
         context);
+
+    /* The prompt_id passed here was duplicated when connecting the signal;
+     * free the duplicate now that we've copied the string into the context. */
+    g_free(prompt_id);
 }
 
+/*
+ * action_msg_composer_dropdown_cb:
+ * Show a transient GTK popup menu listing all configured prompts. Each
+ * menu item stores a pointer to the extension in its object data and a
+ * duplicated prompt id as `user_data` so the activate handler can run the
+ * proofreading flow.
+ */
 static void
 action_msg_composer_dropdown_cb(EUIAction *action,
                                 GVariant *parameter,
@@ -314,7 +396,11 @@ action_msg_composer_dropdown_cb(EUIAction *action,
         GtkWidget *mi = gtk_menu_item_new_with_label(json_object_get_string_member(prompt, "name"));
         /* store extension on the menu item for retrieval in activate handler */
         g_object_set_data(G_OBJECT(mi), "extension", msg_composer_ext);
-        g_signal_connect(mi, "activate", G_CALLBACK(menu_item_activate_cb), action_name);
+        /* Duplicate the action name for the menu item's user_data so it remains
+         * valid after the entries[] array (which also holds the original
+         * action_name pointer) is freed. The activate handler is responsible
+         * for freeing this duplicate. */
+        g_signal_connect(mi, "activate", G_CALLBACK(menu_item_activate_cb), g_strdup(action_name));
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
         gtk_widget_show(mi);
     }
@@ -359,36 +445,31 @@ run_button_clicked_cb(GtkButton *button,
     }
 }
 
-static void
-m_msg_composer_extension_add_ui(MMsgComposerExtension *msg_composer_ext,
-                                EMsgComposer *composer)
+/*
+ * Build EUI action entries and the corresponding EUI XML string for the
+ * configured prompts. The caller receives an allocated `EUIActionEntry *`
+ * containing `n_prompts + 2` entries (one per prompt, plus the parent AI
+ * menu and the dropdown action). The caller is responsible for freeing the
+ * strings in each entry, the entries array and the returned `GString`.
+ *
+ * Returns: newly allocated `EUIActionEntry *` on success, or NULL if there
+ *          are no prompts. On success `*out_count` is set to `n_prompts` and
+ *          `*out_eui_def` points to a new `GString` with the EUI XML.
+ */
+static EUIActionEntry *
+build_action_entries_and_eui(JsonArray *prompts, guint *out_count, GString **out_eui_def)
 {
-    g_return_if_fail(M_IS_MSG_COMPOSER_EXTENSION(msg_composer_ext));
-    g_return_if_fail(E_IS_MSG_COMPOSER(composer));
-
-    // Check if we have any prompts
-    if (!msg_composer_ext->priv->prompts ||
-        json_array_get_length(msg_composer_ext->priv->prompts) == 0)
-    {
-        g_warning("No prompts configured, skipping UI creation");
-        return;
-    }
-
-    if (!msg_composer_ext->priv->chatgpt_api_key)
-    {
-        g_warning("No API key configured, skipping UI creation");
-        return;
-    }
-
-    GString *eui_def;
-    EHTMLEditor *html_editor;
-    EUIManager *ui_manager;
     guint i, n_prompts;
+    GString *eui_def;
+    EUIActionEntry *entries;
 
-    html_editor = e_msg_composer_get_editor(composer);
-    ui_manager = e_html_editor_get_ui_manager(html_editor);
+    if (!prompts)
+        return NULL;
 
-    /* Build EUI definition: insert ai-menu into the 'custom-menus' placeholder (commonly at the end) */
+    n_prompts = json_array_get_length(prompts);
+    if (n_prompts == 0)
+        return NULL;
+
     eui_def = g_string_new(
         "<eui>"
         "<menu id='main-menu'>"
@@ -396,20 +477,11 @@ m_msg_composer_extension_add_ui(MMsgComposerExtension *msg_composer_ext,
         "<submenu action='ai-menu'>"
         "<placeholder id='ai-menu-holder'>");
 
-    /* Prepare action entries: one per prompt, plus a parent menu action */
-    n_prompts = json_array_get_length(msg_composer_ext->priv->prompts);
-    if (n_prompts == 0)
-    {
-        g_string_free(eui_def, TRUE);
-        return;
-    }
-
-    /* We need one entry per prompt, plus an `ai-menu` parent, plus the dropdown toolbar action */
-    EUIActionEntry *entries = g_new0(EUIActionEntry, n_prompts + 2);
+    entries = g_new0(EUIActionEntry, n_prompts + 2);
 
     for (i = 0; i < n_prompts; i++)
     {
-        JsonObject *prompt = json_array_get_object_element(msg_composer_ext->priv->prompts, i);
+        JsonObject *prompt = json_array_get_object_element(prompts, i);
         const gchar *name = json_object_get_string_member(prompt, "name");
         const gchar *prompt_text = json_object_get_string_member(prompt, "prompt");
 
@@ -427,10 +499,8 @@ m_msg_composer_extension_add_ui(MMsgComposerExtension *msg_composer_ext,
             NULL};
 
         g_string_append_printf(eui_def,
-                               "          <item action='%s'/>\n",
+                               "          <item action='%s'/>",
                                action_name);
-
-        /* keep action_name allocated because entries[i].name points to it */
     }
 
     g_string_append(eui_def,
@@ -482,12 +552,56 @@ m_msg_composer_extension_add_ui(MMsgComposerExtension *msg_composer_ext,
             entries[i].tooltip = g_strdup("");
     }
 
+    *out_count = n_prompts;
+    *out_eui_def = eui_def;
+    return entries;
+}
+
+static void
+m_msg_composer_extension_add_ui(MMsgComposerExtension *msg_composer_ext,
+                                EMsgComposer *composer)
+{
+    /*
+     * Add UI elements (menu actions and toolbar button) for the configured
+     * prompts. This function delegates the creation of action entries and
+     * the EUI XML string to `build_action_entries_and_eui()` so the
+     * implementation stays concise and easier to follow.
+     */
+    g_return_if_fail(M_IS_MSG_COMPOSER_EXTENSION(msg_composer_ext));
+    g_return_if_fail(E_IS_MSG_COMPOSER(composer));
+
+    /* Validate configuration before doing work */
+    if (!msg_composer_ext->priv->prompts ||
+        json_array_get_length(msg_composer_ext->priv->prompts) == 0)
+    {
+        g_warning("No prompts configured, skipping UI creation");
+        return;
+    }
+
+    if (!msg_composer_ext->priv->chatgpt_api_key)
+    {
+        g_warning("No API key configured, skipping UI creation");
+        return;
+    }
+
+    EHTMLEditor *html_editor = e_msg_composer_get_editor(composer);
+    EUIManager *ui_manager = e_html_editor_get_ui_manager(html_editor);
+
+    guint n_prompts = 0;
+    GString *eui_def = NULL;
+    EUIActionEntry *entries = build_action_entries_and_eui(msg_composer_ext->priv->prompts, &n_prompts, &eui_def);
+    if (!entries)
+    {
+        g_warning("No action entries built, skipping UI registration");
+        return;
+    }
+
     /* Register actions and UI with the EUI manager */
     e_ui_manager_add_actions_with_eui_data(ui_manager, "core", GETTEXT_PACKAGE,
                                            entries, n_prompts + 2, msg_composer_ext, eui_def->str);
 
-    /* Free allocated names and strings in entries */
-    for (i = 0; i < n_prompts + 2; i++)
+    /* Free allocated names and strings in entries (ownership contract) */
+    for (guint i = 0; i < n_prompts + 2; i++)
     {
         g_free((gpointer)entries[i].name);
         g_free((gpointer)entries[i].label);

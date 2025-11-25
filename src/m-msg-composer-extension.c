@@ -370,14 +370,14 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
     html_editor = e_msg_composer_get_editor (composer);
     ui_manager = e_html_editor_get_ui_manager (html_editor);
 
-        /* Build EUI definition with menu and toolbar placeholders for our actions */
-        eui_def = g_string_new(
-                "<eui>"
-                    "<menu id='main-menu'>"
-                        "<placeholder id='pre-edit-menu'>"
-                            "<submenu action='file-menu'>"
-                                "<placeholder id='external-editor-holder'>"
-        );
+                /* Build EUI definition: insert ai-menu into the 'custom-menus' placeholder (commonly at the end) */
+                eui_def = g_string_new(
+                        "<eui>"
+                            "<menu id='main-menu'>"
+                                "<placeholder id='custom-menus'>"
+                                    "<submenu action='ai-menu'>"
+                                        "<placeholder id='ai-menu-holder'>"
+                );
 
     /* Prepare action entries: one per prompt, plus a parent menu action */
     n_prompts = json_array_get_length(msg_composer_ext->priv->prompts);
@@ -386,7 +386,8 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
         return;
     }
 
-    EUIActionEntry *entries = g_new0(EUIActionEntry, n_prompts + 1);
+    /* We need one entry per prompt, plus an `ai-menu` parent, plus the dropdown toolbar action */
+    EUIActionEntry *entries = g_new0(EUIActionEntry, n_prompts + 2);
 
     for (i = 0; i < n_prompts; i++) {
         JsonObject *prompt = json_array_get_object_element(msg_composer_ext->priv->prompts, i);
@@ -414,20 +415,33 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
         /* keep action_name allocated because entries[i].name points to it */
     }
 
-        g_string_append(eui_def,
-                        "                </placeholder>"
-                    "              </submenu>"
-                "            </placeholder>"
-                "          </menu>\n"
-        );
+                g_string_append(eui_def,
+                                                "                                        </placeholder>"
+                                    "                                    </submenu>"
+                                "                                </placeholder>"
+                            "                            </menu>\n"
+                );
 
         /* Add a single toolbar button that triggers the dropdown */
         g_string_append(eui_def, "<toolbar id='main-toolbar-with-headerbar'>\n  <item action='ai-proofread-dropdown'/>\n</toolbar>\n");
         g_string_append(eui_def, "<toolbar id='main-toolbar-without-headerbar'>\n  <item action='ai-proofread-dropdown'/>\n</toolbar>\n");
         g_string_append(eui_def, "</eui>");
 
-        /* Dropdown action entry (single toolbar button that shows a popup menu of prompts) */
+        /* Parent top-level AI menu action (no callback) */
         entries[n_prompts] = (EUIActionEntry){
+            g_strdup("ai-menu"),
+            NULL,
+            g_strdup(N_("AI")),
+            NULL,
+            g_strdup(N_("AI tools")),
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        };
+
+        /* Dropdown action entry (single toolbar button that shows a popup menu of prompts) */
+        entries[n_prompts + 1] = (EUIActionEntry){
             g_strdup("ai-proofread-dropdown"),
             "tools-check-spelling",
             g_strdup(N_("AI _Proofread")),
@@ -440,7 +454,7 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
         };
 
     /* Validate entries: ensure no NULL action names to avoid assertion in e_ui_action_new */
-    for (i = 0; i < n_prompts + 1; i++) {
+    for (i = 0; i < n_prompts + 2; i++) {
         if (!entries[i].name) {
             entries[i].name = g_strdup_printf("ai-proofread-missing-%u", i);
             g_warning("Found null action name for entry %u, using fallback '%s'", i, entries[i].name);
@@ -453,10 +467,10 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 
     /* Register actions and UI with the EUI manager */
     e_ui_manager_add_actions_with_eui_data (ui_manager, "core", GETTEXT_PACKAGE,
-        entries, n_prompts + 1, msg_composer_ext, eui_def->str);
+        entries, n_prompts + 2, msg_composer_ext, eui_def->str);
 
     /* Free allocated names and strings in entries */
-    for (i = 0; i < n_prompts + 1; i++) {
+    for (i = 0; i < n_prompts + 2; i++) {
         g_free((gpointer)entries[i].name);
         g_free((gpointer)entries[i].label);
         g_free((gpointer)entries[i].tooltip);

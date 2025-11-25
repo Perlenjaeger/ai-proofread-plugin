@@ -16,7 +16,7 @@
 typedef struct _EUIManager EUIManager;
 EUIManager *e_html_editor_get_ui_manager (EHTMLEditor *editor);
 GtkActionGroup *e_html_editor_get_action_group (EHTMLEditor *editor, const gchar *name);
-void e_action_group_add_actions_localized (GtkActionGroup *action_group, const gchar *domain, const GtkActionEntry *entries, gint n_entries, gpointer user_data);
+GtkWidget *e_ui_manager_get_widget (EUIManager *manager, const gchar *path);
 
 
 struct _MMsgComposerExtensionPrivate {
@@ -26,7 +26,7 @@ struct _MMsgComposerExtensionPrivate {
 
 struct ProofreadContext {
     EContentEditor *cnt_editor;
-    const gchar *prompt_id;
+    gchar *prompt_id;
     MMsgComposerExtension *extension;
 };
 
@@ -198,33 +198,38 @@ msg_text_cb (GObject *source_object,
     }
 
     e_content_editor_util_free_content_hash (content_hash);
+    g_free(context->prompt_id);
     g_free(context);
 }
 
+/* removed GtkAction-based prompt callback — using EUI-based callbacks instead */
+
 static void
-action_msg_composer_prompt_cb (GtkAction *action,
-                             MMsgComposerExtension *msg_composer_ext)
+action_msg_composer_eui_cb (EUIAction *action,
+                           GVariant *parameter,
+                           gpointer user_data)
 {
-    const gchar *prompt_id = gtk_action_get_name(action);
-    g_debug("Action callback triggered for prompt: %s", prompt_id);
-    
+    gchar *action_name = NULL;
+    MMsgComposerExtension *msg_composer_ext = M_MSG_COMPOSER_EXTENSION(user_data);
     EMsgComposer *composer;
-    EHTMLEditor *editor;    
+    EHTMLEditor *editor;
     EContentEditor *cnt_editor;
-    
+
     g_return_if_fail (M_IS_MSG_COMPOSER_EXTENSION (msg_composer_ext));
 
+    g_object_get(action, "name", &action_name, NULL);
+    if (!action_name)
+        return;
     composer = E_MSG_COMPOSER (e_extension_get_extensible (E_EXTENSION (msg_composer_ext)));
     editor = e_msg_composer_get_editor (composer);
     cnt_editor = e_html_editor_get_content_editor (editor);
 
-    // Create context to pass to callback
     struct ProofreadContext *context = g_new(struct ProofreadContext, 1);
     context->cnt_editor = cnt_editor;
-    context->prompt_id = prompt_id;
+    context->prompt_id = g_strdup(action_name);
     context->extension = msg_composer_ext;
 
-    g_debug("Getting content");
+    g_debug("Getting content for action: %s", action_name);
     e_content_editor_get_content (
         cnt_editor,
         E_CONTENT_EDITOR_GET_TO_SEND_PLAIN,
@@ -232,7 +237,73 @@ action_msg_composer_prompt_cb (GtkAction *action,
         NULL,
         msg_text_cb,
         context
-    );    
+    );
+
+    g_free(action_name);
+}
+
+static void
+menu_item_activate_cb (GtkMenuItem *item, gpointer user_data)
+{
+    gchar *prompt_id = user_data;
+    MMsgComposerExtension *msg_composer_ext;
+    EMsgComposer *composer;
+    EHTMLEditor *editor;
+    EContentEditor *cnt_editor;
+
+    if (!prompt_id)
+        return;
+
+    msg_composer_ext = M_MSG_COMPOSER_EXTENSION (g_object_get_data(G_OBJECT(item), "extension"));
+    if (!msg_composer_ext)
+        return;
+
+    composer = E_MSG_COMPOSER (e_extension_get_extensible (E_EXTENSION (msg_composer_ext)));
+    editor = e_msg_composer_get_editor (composer);
+    cnt_editor = e_html_editor_get_content_editor (editor);
+
+    struct ProofreadContext *context = g_new(struct ProofreadContext, 1);
+    context->cnt_editor = cnt_editor;
+    context->prompt_id = g_strdup(prompt_id);
+    context->extension = msg_composer_ext;
+
+    e_content_editor_get_content (
+        cnt_editor,
+        E_CONTENT_EDITOR_GET_TO_SEND_PLAIN,
+        NULL,
+        NULL,
+        msg_text_cb,
+        context
+    );
+}
+
+static void
+action_msg_composer_dropdown_cb (EUIAction *action,
+                                 GVariant *parameter,
+                                 gpointer user_data)
+{
+    MMsgComposerExtension *msg_composer_ext = M_MSG_COMPOSER_EXTENSION(user_data);
+    GtkWidget *menu;
+    guint i, n_prompts;
+
+    g_return_if_fail (M_IS_MSG_COMPOSER_EXTENSION (msg_composer_ext));
+
+    menu = gtk_menu_new();
+    n_prompts = json_array_get_length(msg_composer_ext->priv->prompts);
+    for (i = 0; i < n_prompts; i++) {
+        JsonObject *prompt = json_array_get_object_element(msg_composer_ext->priv->prompts, i);
+        const gchar *name = json_object_get_string_member(prompt, "name");
+        gchar *action_name = g_strdup_printf("ai-proofread-%s", name);
+
+        GtkWidget *mi = gtk_menu_item_new_with_label(json_object_get_string_member(prompt, "name"));
+        /* store extension on the menu item for retrieval in activate handler */
+        g_object_set_data(G_OBJECT(mi), "extension", msg_composer_ext);
+        g_signal_connect(mi, "activate", G_CALLBACK(menu_item_activate_cb), action_name);
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
+        gtk_widget_show(mi);
+    }
+
+    gtk_menu_popup_at_pointer(GTK_MENU(menu), NULL);
 }
 
 static void
@@ -258,7 +329,7 @@ run_button_clicked_cb (GtkButton *button,
         // Create context to pass to callback
         struct ProofreadContext *context = g_new(struct ProofreadContext, 1);
         context->cnt_editor = cnt_editor;
-        context->prompt_id = prompt_id;
+        context->prompt_id = g_strdup(prompt_id);
         context->extension = msg_composer_ext;
 
         e_content_editor_get_content (
@@ -291,125 +362,107 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
         return;
     }   
 
-    GString *ui_def;
+    GString *eui_def;
     EHTMLEditor *html_editor;
-    GtkActionGroup *action_group;
     EUIManager *ui_manager;
-    GError *error = NULL;
     guint i, n_prompts;
 
     html_editor = e_msg_composer_get_editor (composer);
     ui_manager = e_html_editor_get_ui_manager (html_editor);
-    action_group = e_html_editor_get_action_group (html_editor, "core");
 
-    // Build UI definition for menu
-    ui_def = g_string_new(
-        "<menubar name='main-menu'>\n"
-        "  <placeholder name='pre-edit-menu'>\n"
-        "    <menu action='file-menu'>\n"
-        "      <placeholder name='external-editor-holder'>\n"
-        "        <menu action='ai-proofread-menu'>\n"
-    );
+        /* Build EUI definition with menu and toolbar placeholders for our actions */
+        eui_def = g_string_new(
+                "<eui>"
+                    "<menu id='main-menu'>"
+                        "<placeholder id='pre-edit-menu'>"
+                            "<submenu action='file-menu'>"
+                                "<placeholder id='external-editor-holder'>"
+        );
 
-    // Create combo box for toolbar
-    GtkComboBoxText *combo = GTK_COMBO_BOX_TEXT(gtk_combo_box_text_new());
-    
-    // Add actions for each prompt
+    /* Prepare action entries: one per prompt, plus a parent menu action */
     n_prompts = json_array_get_length(msg_composer_ext->priv->prompts);
+    if (n_prompts == 0) {
+        g_string_free(eui_def, TRUE);
+        return;
+    }
+
+    EUIActionEntry *entries = g_new0(EUIActionEntry, n_prompts + 1);
+
     for (i = 0; i < n_prompts; i++) {
         JsonObject *prompt = json_array_get_object_element(msg_composer_ext->priv->prompts, i);
         const gchar *name = json_object_get_string_member(prompt, "name");
         const gchar *prompt_text = json_object_get_string_member(prompt, "prompt");
-        
+
         gchar *action_name = g_strdup_printf("ai-proofread-%s", name);
-        GtkActionEntry entry = {
+
+        entries[i] = (EUIActionEntry){
             action_name,
             "tools-check-spelling",
-            name,
+            g_strdup(name),
             NULL,
-            prompt_text,
-            G_CALLBACK(action_msg_composer_prompt_cb)
+            g_strdup(prompt_text),
+            action_msg_composer_eui_cb,
+            NULL,
+            NULL,
+            NULL
         };
-        
-        gtk_action_group_add_actions(action_group, &entry, 1, msg_composer_ext);
-        
-        g_string_append_printf(ui_def,
-            "          <menuitem action='%s'/>\n",
+
+        g_string_append_printf(eui_def,
+            "          <item action='%s'/>\n",
             action_name);
-            
-        // Add item to combo box
-        gtk_combo_box_text_append(combo, action_name, name);
-        
-        g_free(action_name);
+
+        /* keep action_name allocated because entries[i].name points to it */
     }
 
-    // Set initial selection
-    if (n_prompts > 0) {
-        gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+        g_string_append(eui_def,
+                        "                </placeholder>"
+                    "              </submenu>"
+                "            </placeholder>"
+                "          </menu>\n"
+        );
+
+        /* Add a single toolbar button that triggers the dropdown */
+        g_string_append(eui_def, "<toolbar id='main-toolbar-with-headerbar'>\n  <item action='ai-proofread-dropdown'/>\n</toolbar>\n");
+        g_string_append(eui_def, "<toolbar id='main-toolbar-without-headerbar'>\n  <item action='ai-proofread-dropdown'/>\n</toolbar>\n");
+        g_string_append(eui_def, "</eui>");
+
+        /* Dropdown action entry (single toolbar button that shows a popup menu of prompts) */
+        entries[n_prompts] = (EUIActionEntry){
+            g_strdup("ai-proofread-dropdown"),
+            "tools-check-spelling",
+            g_strdup(N_("AI _Proofread")),
+            NULL,
+            g_strdup(N_("AI Proofread")),
+            action_msg_composer_dropdown_cb,
+            NULL,
+            NULL,
+            NULL
+        };
+
+    /* Validate entries: ensure no NULL action names to avoid assertion in e_ui_action_new */
+    for (i = 0; i < n_prompts + 1; i++) {
+        if (!entries[i].name) {
+            entries[i].name = g_strdup_printf("ai-proofread-missing-%u", i);
+            g_warning("Found null action name for entry %u, using fallback '%s'", i, entries[i].name);
+        }
+        if (!entries[i].label)
+            entries[i].label = g_strdup("(no label)");
+        if (!entries[i].tooltip)
+            entries[i].tooltip = g_strdup("");
     }
 
-    g_string_append(ui_def,
-        "        </menu>\n"
-        "      </placeholder>\n"
-        "    </menu>\n"
-        "  </placeholder>\n"
-        "</menubar>\n"
-    );
+    /* Register actions and UI with the EUI manager */
+    e_ui_manager_add_actions_with_eui_data (ui_manager, "core", GETTEXT_PACKAGE,
+        entries, n_prompts + 1, msg_composer_ext, eui_def->str);
 
-    // Add main menu action
-    GtkActionEntry menu_entry = {
-        "ai-proofread-menu",
-        "tools-check-spelling",
-        N_("AI _Proofread"),
-        NULL,
-        N_("AI Proofread"),
-        NULL
-    };
-    e_action_group_add_actions_localized(action_group, GETTEXT_PACKAGE,
-        &menu_entry, 1, msg_composer_ext);
-
-    gtk_ui_manager_add_ui_from_string((GtkUIManager*)ui_manager, ui_def->str, -1, &error);
-
-    if (error) {
-        g_warning("%s: Failed to add ui definition: %s", G_STRFUNC, error->message);
-        g_error_free(error);
+    /* Free allocated names and strings in entries */
+    for (i = 0; i < n_prompts + 1; i++) {
+        g_free((gpointer)entries[i].name);
+        g_free((gpointer)entries[i].label);
+        g_free((gpointer)entries[i].tooltip);
     }
-
-    // Create frame to group controls
-    GtkFrame *frame = GTK_FRAME(gtk_frame_new(NULL));
-    gtk_frame_set_shadow_type(frame, GTK_SHADOW_IN);  // or GTK_SHADOW_ETCHED_IN for different style
-    
-    // Create container for combo and button
-    GtkBox *hbox = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2));
-    gtk_container_set_border_width(GTK_CONTAINER(hbox), 2);  // Add some padding
-    
-    // Add combo box to container
-    gtk_box_pack_start(hbox, GTK_WIDGET(combo), TRUE, TRUE, 0);
-    
-    // Create and add run button with spell-check icon
-    GtkButton *run_button = GTK_BUTTON(gtk_button_new_from_icon_name("tools-check-spelling", GTK_ICON_SIZE_BUTTON));
-    gtk_box_pack_start(hbox, GTK_WIDGET(run_button), FALSE, FALSE, 0);
-    
-    // Store combo reference in button for callback
-    g_object_set_data(G_OBJECT(run_button), "combo", combo);
-    
-    // Add hbox to frame
-    gtk_container_add(GTK_CONTAINER(frame), GTK_WIDGET(hbox));
-    
-    // Add frame to toolbar
-    GtkToolItem *tool_item = gtk_tool_item_new();
-    gtk_container_add(GTK_CONTAINER(tool_item), GTK_WIDGET(frame));
-    gtk_widget_show_all(GTK_WIDGET(tool_item));
-    
-    GtkToolbar *toolbar = GTK_TOOLBAR(gtk_ui_manager_get_widget((GtkUIManager*)ui_manager, "/main-toolbar"));
-    gtk_toolbar_insert(toolbar, tool_item, -1);
-
-    // Connect signals
-    g_signal_connect(run_button, "clicked",
-                    G_CALLBACK(run_button_clicked_cb), msg_composer_ext);
-
-    gtk_ui_manager_ensure_update((GtkUIManager*)ui_manager);
-    g_string_free(ui_def, TRUE);
+    g_free(entries);
+    g_string_free(eui_def, TRUE);
 }
 
 static void

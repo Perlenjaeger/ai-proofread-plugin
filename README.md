@@ -1,8 +1,10 @@
-# Evolution AI Proofread Plugin
+# AI-Proof Read Plugin
 
-This plugin adds a "AI Proofread" button to the message composition
-toolbar of the Evolution email client. The button allows you to
-proofread the email text using OpenAI's GPT API before sending it.
+This plugin adds a `Spellcheck` (AI-Proof Read) button to the main
+message composition toolbar of the Evolution email client. The
+button lets you proofread or spellcheck the email text using OpenAI's
+GPT API before sending it. There is also an `AI` field in the menubar
+for quick access to AI features.
 
 ![Screenshot](screenshot.png)
 
@@ -32,9 +34,9 @@ Example:
 
 ## Usage
 
-Afer installing the plugin, you can use it in Evolution by selecting the prompt from the toolbar combo box and clicking the "AI Proofread" button in the message composition toolbar or using File->AI Proofread menu item.
+After installing the plugin, use the toolbar prompt selector and click the `Spellcheck` (AI-Proof Read) button in the main message composition toolbar, or use the `AI` entry in the menubar.
 
-Currently it inserts the proofread text into the message body at the cursor position. If you want to replace the original text, you need to select the text and click the "AI Proofread" button.
+By default it inserts the proofread text into the message body at the cursor position. To replace the original text, select the text first and then click the `Spellcheck` button.
 
 ## Building
 
@@ -52,12 +54,12 @@ To use under vscode first generate `compile_commands.json`:
 $ cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
 ```
 
-## Futurue plans
+## Future plans
 
 I primarily use this plugin myself, so the features are tuned for my needs. However I'm open to suggestions and pull requests.
 Some ideas:
 
-- Replace all reply text with the proofread text withou need to select it first.
+- Replace all reply text with the proofread text without the need to select it first.
 - UI for configuring prompts.
 - Support for other LLM providers (e.g. Anthropic).
 - UI for configuring LLM provider keys and other options (e.g. model, temperature, etc.).
@@ -70,4 +72,4 @@ This plugin is open-source and licensed under the GPL License.
 ## Author
 
 Vadim Zaliva, 2024
-
+Upgraded to GTK 4.10 by Sven Förster, 2025

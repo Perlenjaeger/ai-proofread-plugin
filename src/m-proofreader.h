@@ -23,6 +23,7 @@ G_BEGIN_DECLS
  * @prompt_id: The prompt identifier to use
  * @prompts: Array of available prompts
  * @api_key: The API key for the proofreading service
+ * @model: The AI model to use
  * @composer: The message composer (for error alerts)
  *
  * Context structure passed through async proofreading operations.
@@ -35,7 +36,10 @@ struct _MProofreadContext
     gchar *prompt_id;
     JsonArray *prompts;
     gchar *api_key;
+    gchar *model;
     EMsgComposer *composer;
+    GtkWidget *wait_dialog;
+    guint wait_timeout_id;
 };
 
 /**
@@ -44,6 +48,7 @@ struct _MProofreadContext
  * @prompt_id: The prompt identifier (will be copied)
  * @prompts: The prompts array (will be referenced)
  * @api_key: The API key (will be copied)
+ * @model: The AI model to use (will be copied)
  * @composer: The message composer
  *
  * Create a new proofreading context.
@@ -51,10 +56,11 @@ struct _MProofreadContext
  * Returns: (transfer full): A newly allocated context
  */
 MProofreadContext *m_proofreader_context_new(EContentEditor *cnt_editor,
-                                              const gchar *prompt_id,
-                                              JsonArray *prompts,
-                                              const gchar *api_key,
-                                              EMsgComposer *composer);
+                                             const gchar *prompt_id,
+                                             JsonArray *prompts,
+                                             const gchar *api_key,
+                                             const gchar *model,
+                                             EMsgComposer *composer);
 
 /**
  * m_proofreader_context_free:
@@ -83,6 +89,7 @@ void m_proofreader_content_ready_cb(GObject *source_object,
  * @prompt_id: The prompt identifier
  * @prompts: The prompts array
  * @api_key: The API key
+ * @model: The AI model to use
  * @composer: The message composer
  *
  * Start the proofreading process by requesting editor content.
@@ -92,6 +99,7 @@ void m_proofreader_start(EContentEditor *cnt_editor,
                          const gchar *prompt_id,
                          JsonArray *prompts,
                          const gchar *api_key,
+                         const gchar *model,
                          EMsgComposer *composer);
 
 G_END_DECLS

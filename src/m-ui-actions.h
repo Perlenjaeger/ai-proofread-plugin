@@ -22,6 +22,8 @@ G_BEGIN_DECLS
  * MUIActionContext:
  * @prompts: Array of available prompts
  * @api_key: The API key for the proofreading service
+ * @model: The currently selected AI model
+ * @models: List of available models (GList of gchar*)
  *
  * Context for UI action callbacks.
  */
@@ -31,18 +33,34 @@ struct _MUIActionContext
 {
     JsonArray *prompts;
     gchar *api_key;
+    gchar *model;
+    GList *models;
 };
 
 /**
  * m_ui_action_context_new:
  * @prompts: The prompts array (will be referenced)
  * @api_key: The API key (will be copied)
+ * @model: The selected model (will be copied)
+ * @models: List of available models (will be copied)
  *
  * Create a new UI action context.
  *
  * Returns: (transfer full): A newly allocated context
  */
-MUIActionContext *m_ui_action_context_new(JsonArray *prompts, const gchar *api_key);
+MUIActionContext *m_ui_action_context_new(JsonArray *prompts,
+                                          const gchar *api_key,
+                                          const gchar *model,
+                                          GList *models);
+
+/**
+ * m_ui_action_context_set_model:
+ * @context: The action context
+ * @model: The new model to set
+ *
+ * Update the selected model in the context and save it to config.
+ */
+void m_ui_action_context_set_model(MUIActionContext *context, const gchar *model);
 
 /**
  * m_ui_action_context_free:

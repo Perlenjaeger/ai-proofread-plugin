@@ -25,11 +25,14 @@
 #include "m-msg-composer-extension.h"
 #include "m-config.h"
 #include "m-ui-actions.h"
+#include "m-chatgpt-api.h"
 
 struct _MMsgComposerExtensionPrivate
 {
     JsonArray *prompts;           /* Array of prompts loaded from config */
     gchar *chatgpt_api_key;       /* OpenAI API key */
+    gchar *model;                 /* Selected AI model */
+    GList *models;                /* List of available models */
     MUIActionContext *ui_context; /* UI action context */
 };
 
@@ -85,7 +88,9 @@ m_msg_composer_extension_add_ui(MMsgComposerExtension *extension,
     /* Create UI action context */
     extension->priv->ui_context = m_ui_action_context_new(
         extension->priv->prompts,
-        extension->priv->chatgpt_api_key);
+        extension->priv->chatgpt_api_key,
+        extension->priv->model,
+        extension->priv->models);
 
     /* Build action entries and EUI XML */
     action_entries = m_ui_build_action_entries(
@@ -134,6 +139,13 @@ m_msg_composer_extension_dispose(GObject *object)
     }
 
     g_clear_pointer(&extension->priv->chatgpt_api_key, g_free);
+    g_clear_pointer(&extension->priv->model, g_free);
+
+    if (extension->priv->models)
+    {
+        g_list_free_full(extension->priv->models, g_free);
+        extension->priv->models = NULL;
+    }
 
     if (extension->priv->ui_context)
     {
@@ -174,7 +186,24 @@ m_msg_composer_extension_init(MMsgComposerExtension *extension)
     /* Load configuration using the config module */
     extension->priv->prompts = m_config_load_prompts();
     extension->priv->chatgpt_api_key = m_config_load_api_key();
+    extension->priv->model = m_config_load_model();
+    extension->priv->models = NULL;
     extension->priv->ui_context = NULL;
+
+    /* Fetch available models from API */
+    if (extension->priv->chatgpt_api_key)
+    {
+        GError *error = NULL;
+        extension->priv->models = m_chatgpt_fetch_models(
+            extension->priv->chatgpt_api_key,
+            &error);
+
+        if (error)
+        {
+            g_warning("Failed to fetch models: %s", error->message);
+            g_error_free(error);
+        }
+    }
 }
 
 void

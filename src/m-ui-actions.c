@@ -13,6 +13,7 @@
 
 #include "m-ui-actions.h"
 #include "m-proofreader.h"
+#include "m-config.h"
 
 /* Forward declarations for E/GTK UI helpers */
 typedef struct _EUIManager EUIManager;
@@ -25,14 +26,40 @@ static MUIActionContext *g_action_context = NULL;
  * m_ui_action_context_new:
  */
 MUIActionContext *
-m_ui_action_context_new(JsonArray *prompts, const gchar *api_key)
+m_ui_action_context_new(JsonArray *prompts,
+                        const gchar *api_key,
+                        const gchar *model,
+                        GList *models)
 {
     MUIActionContext *context = g_new0(MUIActionContext, 1);
 
     context->prompts = json_array_ref(prompts);
     context->api_key = g_strdup(api_key);
+    context->model = g_strdup(model ? model : M_CONFIG_DEFAULT_MODEL);
+
+    /* Copy models list */
+    context->models = NULL;
+    for (GList *l = models; l != NULL; l = l->next)
+    {
+        context->models = g_list_append(context->models, g_strdup(l->data));
+    }
 
     return context;
+}
+
+/*
+ * m_ui_action_context_set_model:
+ */
+void m_ui_action_context_set_model(MUIActionContext *context, const gchar *model)
+{
+    g_return_if_fail(context != NULL);
+    g_return_if_fail(model != NULL);
+
+    g_free(context->model);
+    context->model = g_strdup(model);
+
+    /* Save to config */
+    m_config_save_model(model);
 }
 
 /*
@@ -48,6 +75,8 @@ m_ui_action_context_free(MUIActionContext *context)
         json_array_unref(context->prompts);
 
     g_free(context->api_key);
+    g_free(context->model);
+    g_list_free_full(context->models, g_free);
     g_free(context);
 }
 
@@ -134,7 +163,7 @@ action_proofread_cb(EUIAction *action,
 
     g_debug("Proofread action triggered: %s", action_name);
 
-    m_proofreader_start(cnt_editor, action_name, ctx->prompts, ctx->api_key, composer);
+    m_proofreader_start(cnt_editor, action_name, ctx->prompts, ctx->api_key, ctx->model, composer);
 
     g_free(action_name);
 }
@@ -163,7 +192,7 @@ menu_item_activate_cb(GtkMenuItem *item, gpointer user_data)
     editor = e_msg_composer_get_editor(composer);
     cnt_editor = e_html_editor_get_content_editor(editor);
 
-    m_proofreader_start(cnt_editor, prompt_id, ctx->prompts, ctx->api_key, composer);
+    m_proofreader_start(cnt_editor, prompt_id, ctx->prompts, ctx->api_key, ctx->model, composer);
 
     g_free(prompt_id);
 }
@@ -215,13 +244,50 @@ action_dropdown_cb(EUIAction *action,
 }
 
 /*
+ * action_select_model_cb:
+ *
+ * EUI action callback for model selection menu items.
+ */
+static void
+action_select_model_cb(EUIAction *action,
+                       GVariant *parameter,
+                       gpointer user_data)
+{
+    gchar *action_name = NULL;
+    MUIActionContext *ctx = g_action_context;
+    const gchar *model_id;
+
+    if (!ctx)
+    {
+        g_warning("No action context available");
+        return;
+    }
+
+    g_object_get(action, "name", &action_name, NULL);
+    if (!action_name)
+        return;
+
+    /* Extract model ID from action name (ai-model-<model_id>) */
+    if (g_str_has_prefix(action_name, "ai-model-"))
+    {
+        model_id = action_name + strlen("ai-model-");
+        g_debug("Model selected: %s", model_id);
+        m_ui_action_context_set_model(ctx, model_id);
+    }
+
+    g_free(action_name);
+}
+
+/*
  * build_eui_xml:
  * @prompts: Array of prompts
+ * @models: List of available models
+ * @current_model: Currently selected model
  *
  * Build the EUI XML string for menu and toolbar items.
  */
 static gchar *
-build_eui_xml(JsonArray *prompts)
+build_eui_xml(JsonArray *prompts, GList *models, const gchar *current_model)
 {
     GString *xml;
     guint i, n_prompts;
@@ -243,6 +309,20 @@ build_eui_xml(JsonArray *prompts)
         g_string_append_printf(xml, "<item action='%s'/>", action_name);
         g_free(action_name);
     }
+
+    /* Add separator and Model submenu */
+    g_string_append(xml, "<separator/>");
+    g_string_append(xml, "<submenu action='ai-model-menu'>");
+
+    for (GList *l = models; l != NULL; l = l->next)
+    {
+        const gchar *model_id = l->data;
+        gchar *action_name = g_strdup_printf("ai-model-%s", model_id);
+        g_string_append_printf(xml, "<item action='%s'/>", action_name);
+        g_free(action_name);
+    }
+
+    g_string_append(xml, "</submenu>");
 
     g_string_append(xml,
                     "</placeholder>"
@@ -323,6 +403,56 @@ create_dropdown_entry(void)
 }
 
 /*
+ * create_model_menu_entry:
+ *
+ * Create the Model submenu entry.
+ */
+static EUIActionEntry
+create_model_menu_entry(const gchar *current_model)
+{
+    gchar *label = g_strdup_printf(N_("Model (%s)"), current_model ? current_model : M_CONFIG_DEFAULT_MODEL);
+    return (EUIActionEntry){
+        g_strdup("ai-model-menu"),
+        NULL,
+        label,
+        NULL,
+        g_strdup(N_("Select AI model")),
+        NULL,
+        NULL,
+        NULL,
+        NULL};
+}
+
+/*
+ * create_model_entry:
+ * @model_id: The model identifier
+ * @is_current: Whether this is the currently selected model
+ *
+ * Create an EUI action entry for a model selection item.
+ */
+static EUIActionEntry
+create_model_entry(const gchar *model_id, gboolean is_current)
+{
+    gchar *label;
+
+    if (is_current)
+        label = g_strdup_printf("✓ %s", model_id);
+    else
+        label = g_strdup(model_id);
+
+    return (EUIActionEntry){
+        g_strdup_printf("ai-model-%s", model_id),
+        NULL,
+        label,
+        NULL,
+        g_strdup_printf(N_("Use %s model"), model_id),
+        action_select_model_cb,
+        NULL,
+        NULL,
+        NULL};
+}
+
+/*
  * validate_entries:
  * @entries: The entries array
  * @count: Number of entries
@@ -354,6 +484,8 @@ m_ui_build_action_entries(JsonArray *prompts, MUIActionContext *action_context)
 {
     MUIActionEntries *result;
     guint n_prompts;
+    guint n_models;
+    guint idx;
 
     if (!prompts)
         return NULL;
@@ -362,27 +494,43 @@ m_ui_build_action_entries(JsonArray *prompts, MUIActionContext *action_context)
     if (n_prompts == 0)
         return NULL;
 
+    n_models = g_list_length(action_context->models);
+
     result = g_new0(MUIActionEntries, 1);
     result->count = n_prompts;
-    result->total_count = n_prompts + 2; /* prompts + ai-menu + dropdown */
+    /* prompts + ai-menu + dropdown + model-menu + model entries */
+    result->total_count = n_prompts + 3 + n_models;
     result->entries = g_new0(EUIActionEntry, result->total_count);
+
+    idx = 0;
 
     /* Create prompt entries */
     for (guint i = 0; i < n_prompts; i++)
     {
         JsonObject *prompt = json_array_get_object_element(prompts, i);
-        result->entries[i] = create_prompt_entry(prompt);
+        result->entries[idx++] = create_prompt_entry(prompt);
     }
 
     /* Add menu and dropdown entries */
-    result->entries[n_prompts] = create_menu_entry();
-    result->entries[n_prompts + 1] = create_dropdown_entry();
+    result->entries[idx++] = create_menu_entry();
+    result->entries[idx++] = create_dropdown_entry();
+
+    /* Add model menu entry */
+    result->entries[idx++] = create_model_menu_entry(action_context->model);
+
+    /* Add model selection entries */
+    for (GList *l = action_context->models; l != NULL; l = l->next)
+    {
+        const gchar *model_id = l->data;
+        gboolean is_current = g_strcmp0(model_id, action_context->model) == 0;
+        result->entries[idx++] = create_model_entry(model_id, is_current);
+    }
 
     /* Validate all entries */
     validate_entries(result->entries, result->total_count);
 
     /* Build EUI XML */
-    result->eui_xml = build_eui_xml(prompts);
+    result->eui_xml = build_eui_xml(prompts, action_context->models, action_context->model);
 
     return result;
 }

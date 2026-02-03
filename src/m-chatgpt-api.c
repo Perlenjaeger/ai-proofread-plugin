@@ -30,6 +30,7 @@ m_chatgpt_proofread(const gchar *content,
                     const gchar *prompt_id,
                     JsonArray *prompts,
                     const gchar *api_key,
+                    const gchar *model,
                     GError **error)
 {
     SoupSession *session;
@@ -52,7 +53,7 @@ m_chatgpt_proofread(const gchar *content,
     builder = json_builder_new();
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "model");
-    json_builder_add_string_value(builder, "gpt-4o");
+    json_builder_add_string_value(builder, model ? model : "gpt-4o");
     json_builder_set_member_name(builder, "messages");
     json_builder_begin_array(builder);
     
@@ -211,11 +212,140 @@ cleanup:
     g_object_unref(generator);
     json_node_free(root);
     g_object_unref(builder);
-    
-    // Cancel any pending operations
-    soup_session_abort(session);
-    g_object_unref(session);
     g_object_unref(msg);
+    g_object_unref(session);
 
     return response_text;
-} 
+}
+
+#define CHATGPT_MODELS_URL "https://api.openai.com/v1/models"
+
+static gint
+compare_model_ids(gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0((const gchar *)a, (const gchar *)b);
+}
+
+GList *
+m_chatgpt_fetch_models(const gchar *api_key, GError **error)
+{
+    SoupSession *session;
+    SoupMessage *msg;
+    GBytes *response = NULL;
+    GError *local_error = NULL;
+    GList *models = NULL;
+
+    g_return_val_if_fail(api_key != NULL, NULL);
+
+    // Create HTTP session and message
+    session = soup_session_new_with_options(
+        "timeout", 30,
+        "idle-timeout", 0,
+        NULL);
+
+    msg = soup_message_new("GET", CHATGPT_MODELS_URL);
+    if (!msg)
+    {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "Failed to create HTTP message for URL: %s", CHATGPT_MODELS_URL);
+        g_object_unref(session);
+        return NULL;
+    }
+
+    // Set headers
+    gchar *auth_header = g_strdup_printf("Bearer %s", api_key);
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "Authorization", auth_header);
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "User-Agent", CHATGPT_API_USER_AGENT);
+
+    // Send request
+    g_debug("Fetching models from %s", CHATGPT_MODELS_URL);
+    response = soup_session_send_and_read(session, msg, NULL, &local_error);
+
+    // Check HTTP status code
+    guint status_code = soup_message_get_status(msg);
+    const char *reason = soup_message_get_reason_phrase(msg);
+    g_debug("HTTP Status: %d %s", status_code, reason ? reason : "Unknown");
+
+    if (!SOUP_STATUS_IS_SUCCESSFUL(status_code))
+    {
+        const char *response_body = "";
+        if (response)
+        {
+            gsize length;
+            response_body = g_bytes_get_data(response, &length);
+        }
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "HTTP request failed with status %d: %s. Response: %s",
+                    status_code,
+                    reason ? reason : "Unknown error",
+                    response_body);
+        goto cleanup;
+    }
+
+    if (response)
+    {
+        gsize response_length;
+        const gchar *response_data = g_bytes_get_data(response, &response_length);
+
+        // Parse response JSON
+        JsonParser *parser = json_parser_new();
+        if (json_parser_load_from_data(parser, response_data, response_length, error))
+        {
+            JsonNode *root = json_parser_get_root(parser);
+            if (!JSON_NODE_HOLDS_OBJECT(root))
+            {
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Invalid JSON response: root is not an object");
+                g_object_unref(parser);
+                goto cleanup;
+            }
+
+            JsonObject *obj = json_node_get_object(root);
+            if (!json_object_has_member(obj, "data"))
+            {
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Invalid JSON response: no 'data' array");
+                g_object_unref(parser);
+                goto cleanup;
+            }
+
+            JsonArray *data = json_object_get_array_member(obj, "data");
+            guint n_models = json_array_get_length(data);
+
+            for (guint i = 0; i < n_models; i++)
+            {
+                JsonObject *model_obj = json_array_get_object_element(data, i);
+                const gchar *model_id = json_object_get_string_member(model_obj, "id");
+
+                // Only include gpt models suitable for chat completions
+                if (model_id && g_str_has_prefix(model_id, "gpt-"))
+                {
+                    models = g_list_prepend(models, g_strdup(model_id));
+                }
+            }
+
+            // Sort alphabetically
+            models = g_list_sort(models, compare_model_ids);
+        }
+
+        g_object_unref(parser);
+    }
+    else if (local_error)
+    {
+        g_propagate_error(error, local_error);
+        local_error = NULL;
+    }
+
+cleanup:
+    if (response)
+        g_bytes_unref(response);
+    if (local_error)
+        g_error_free(local_error);
+    g_free(auth_header);
+    g_object_unref(msg);
+    g_object_unref(session);
+
+    return models;
+}

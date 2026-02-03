@@ -1,10 +1,16 @@
 set(SOURCES
 	ai-proofread-plugin.c
 	m-msg-composer-extension.c
+	m-config.c
+	m-proofreader.c
+	m-ui-actions.c
 	m-chatgpt-api.c)
 
 set(HEADERS
 	m-msg-composer-extension.h
+	m-config.h
+	m-proofreader.h
+	m-ui-actions.h
 	m-chatgpt-api.h
 	m-version.h)
 

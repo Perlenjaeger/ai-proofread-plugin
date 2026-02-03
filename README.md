@@ -60,6 +60,16 @@ To use under vscode first generate `compile_commands.json`:
 $ cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
 ```
 
+## Debugging
+
+To debug the plugin, run Evolution with debug output enabled:
+
+```bash
+G_MESSAGES_DEBUG=all GTK_DEBUG=all evolution 2>&1 | tee evolution-debug.log
+```
+
+This will display detailed debug messages from GLib and GTK and save them to `evolution-debug.log` for later analysis.
+
 ## Future plans
 
 I primarily use this plugin myself, so the features are tuned for my needs. However I'm open to suggestions and pull requests.

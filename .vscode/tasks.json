@@ -4,14 +4,11 @@
         {
             "label": "Build with Make",
             "type": "shell",
-            "command": "make install",
+            "command": "cmake --install build",
             "args": [],
             "group": {
                 "kind": "build",
                 "isDefault": true
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/_build"
             },
             "problemMatcher": []
         }

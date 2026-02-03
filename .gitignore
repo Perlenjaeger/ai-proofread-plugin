@@ -11,5 +11,5 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
-_build
+build
 prompts.json

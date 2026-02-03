@@ -1,0 +1,9 @@
+{
+    "cmake.generator": "Ninja",
+    "cmake.configureSettings": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "FORCE_INSTALL_PREFIX": "ON",
+        "CMAKE_INSTALL_PREFIX": "~/.local/share/evolution/modules"
+    },
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json"
+}

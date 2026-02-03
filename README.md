@@ -40,11 +40,17 @@ By default it inserts the proofread text into the message body at the cursor pos
 
 ## Building
 
+``` bash
+cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=~/.local/share/evolution/modules -DFORCE_INSTALL_PREFIX=ON .
+cmake --build build
+cmake --install build
 ```
-$ mkdir _build && cd _build
-$ cmake -DCMAKE_INSTALL_PREFIX=~/.local/share/evolution/modules -DFORCE_INSTALL_PREFIX=ON ..
-$ make && make install
-```
+
+or steigt from vs code
+
+`Ctrl+Shift+P` and select `CMake: Build`.
+`Ctrl+Shift+P` and select `CMake: Install`.
+
 
 ## Development
 

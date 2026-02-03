@@ -20,7 +20,7 @@ add_definitions(-DGETTEXT_PACKAGE=\"${GETTEXT_PACKAGE}\")
 set(ARCHIVE_BASE_NAME ${CMAKE_PROJECT_NAME}-${VERSION})
 set(ARCHIVE_FULL_NAME ${ARCHIVE_BASE_NAME}.tar.xz)
 
-set(REQUIRE_EVOLUTION_VERSION 3.36.0)
+set(REQUIRE_EVOLUTION_VERSION 3.56.0)
 
 find_package(PkgConfig REQUIRED)
 
@@ -70,24 +70,3 @@ add_custom_target(
 )
 
 add_subdirectory(src)
-
-set(SOURCES
-    src/ai-proofread-plugin.c
-    src/m-msg-composer-extension.c
-    src/m-chatgpt-api.c)
-
-set(HEADERS
-    src/m-msg-composer-extension.h
-    src/m-chatgpt-api.h)
-
-include_directories(
-    ${EVOLUTION_INCLUDE_DIRS}
-    ${EVOLUTION_SHELL_INCLUDE_DIRS}
-    ${LIBSOUP_INCLUDE_DIRS}
-    ${CMAKE_BINARY_DIR}
-    ${CMAKE_SOURCE_DIR})
-
-target_link_libraries(ai-proofread-plugin
-    ${EVOLUTION_LDFLAGS}
-    ${EVOLUTION_SHELL_LDFLAGS}
-    ${LIBSOUP_LIBRARIES})
